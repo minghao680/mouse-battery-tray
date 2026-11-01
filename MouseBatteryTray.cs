@@ -83,7 +83,8 @@ public class TrayContext : ApplicationContext
     bool lowWarned = false;
     bool firstShown = false;
     bool busy = false;
-    double fontFactor = 0.70;   // 字号比例（相对托盘图标像素尺寸），默认"大"
+    double fontFactor = 0.70;   // 字号比例（相对托盘图标像素尺寸）
+    string colorMode = "auto";  // auto=按电量三色，或固定色名 white/black/yellow/cyan/magenta/green
     Dictionary<string, Icon> iconCache = new Dictionary<string, Icon>();
 
     public TrayContext(bool log, int intervalMs)
@@ -140,6 +141,23 @@ public class TrayContext : ApplicationContext
             miFontSize.DropDownItems.Add(mi);
         }
 
+        ToolStripMenuItem miColor = new ToolStripMenuItem("数字颜色");
+        string[] colorNames = { "auto", "white", "yellow", "cyan", "magenta", "green", "black" };
+        string[] colorLabels = { "自动(按电量)", "白色", "黄色", "青色", "洋红", "绿色", "黑色" };
+        string savedColor = LoadColorMode();
+        if (savedColor != null) colorMode = savedColor;
+        for (int i = 0; i < colorNames.Length; i++)
+        {
+            string cn = colorNames[i];
+            ToolStripMenuItem mi = new ToolStripMenuItem(colorLabels[i]) { Tag = cn, Checked = (cn == colorMode) };
+            mi.Click += delegate
+            {
+                string chosen = (string)((ToolStripMenuItem)mi).Tag;
+                SetColorMode(chosen);
+            };
+            miColor.DropDownItems.Add(mi);
+        }
+
         miStartup = new ToolStripMenuItem("开机自启");
         miStartup.CheckOnClick = true;
         miStartup.Checked = StartupExists();
@@ -155,6 +173,7 @@ public class TrayContext : ApplicationContext
         menu.Items.Add(miRefresh);
         menu.Items.Add(miInterval);
         menu.Items.Add(miFontSize);
+        menu.Items.Add(miColor);
         menu.Items.Add(miStartup);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(miExit);
@@ -295,6 +314,59 @@ public class TrayContext : ApplicationContext
         return -1;
     }
 
+    void SetColorMode(string mode)
+    {
+        colorMode = mode;
+        try
+        {
+            using (RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\MouseBatteryTray"))
+            {
+                k.SetValue("ColorMode", mode, RegistryValueKind.String);
+            }
+        }
+        catch { }
+        ToolStripMenuItem parent = null;
+        foreach (ToolStripItem it in ni.ContextMenuStrip.Items)
+        {
+            ToolStripMenuItem mi = it as ToolStripMenuItem;
+            if (mi != null && mi.Text == "数字颜色") { parent = mi; break; }
+        }
+        if (parent != null)
+        {
+            foreach (ToolStripItem sub in parent.DropDownItems)
+            {
+                ToolStripMenuItem smi = sub as ToolStripMenuItem;
+                if (smi != null) smi.Checked = ((string)smi.Tag == mode);
+            }
+        }
+        Log("color mode set to " + mode);
+        iconCache.Clear();
+        if (lastPct >= 0) ni.Icon = IconFor(lastPct.ToString(), ColorFor(lastPct));
+        else ni.Icon = IconFor("–", Color.Gray);
+    }
+
+    string LoadColorMode()
+    {
+        try
+        {
+            using (RegistryKey k = Registry.CurrentUser.OpenSubKey("Software\\MouseBatteryTray"))
+            {
+                if (k != null)
+                {
+                    object v = k.GetValue("ColorMode");
+                    if (v != null)
+                    {
+                        string s = v.ToString();
+                        if (s == "auto" || s == "white" || s == "yellow" || s == "cyan" ||
+                            s == "magenta" || s == "green" || s == "black") return s;
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
     void PollNow()
     {
         Log("PollNow enter, busy=" + busy);
@@ -376,6 +448,18 @@ public class TrayContext : ApplicationContext
 
     Color ColorFor(int pct)
     {
+        if (colorMode != "auto")
+        {
+            switch (colorMode)
+            {
+                case "white": return Color.White;
+                case "yellow": return Color.FromArgb(255, 220, 40);
+                case "cyan": return Color.FromArgb(60, 210, 235);
+                case "magenta": return Color.FromArgb(235, 100, 220);
+                case "green": return Color.FromArgb(40, 165, 60);
+                case "black": return Color.FromArgb(30, 30, 30);
+            }
+        }
         if (pct > 50) return Color.FromArgb(40, 165, 60);    // 绿
         if (pct > 20) return Color.FromArgb(235, 150, 20);   // 橙
         return Color.FromArgb(215, 45, 60);                  // 红
