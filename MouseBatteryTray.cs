@@ -83,6 +83,7 @@ public class TrayContext : ApplicationContext
     bool lowWarned = false;
     bool firstShown = false;
     bool busy = false;
+    double fontFactor = 0.70;   // 字号比例（相对托盘图标像素尺寸），默认"大"
     Dictionary<string, Icon> iconCache = new Dictionary<string, Icon>();
 
     public TrayContext(bool log, int intervalMs)
@@ -121,6 +122,24 @@ public class TrayContext : ApplicationContext
             miInterval.DropDownItems.Add(mi);
         }
 
+        ToolStripMenuItem miFontSize = new ToolStripMenuItem("数字大小");
+        double[] factors = { 0.58, 0.70, 0.82 };
+        string[] sizeNames = { "小", "中", "大" };
+        double savedFactor = LoadFontFactor();
+        if (savedFactor > 0) fontFactor = savedFactor;
+        for (int i = 0; i < factors.Length; i++)
+        {
+            string name = sizeNames[i];
+            double f = factors[i];
+            ToolStripMenuItem mi = new ToolStripMenuItem(name) { Tag = f, Checked = (Math.Abs(f - fontFactor) < 0.01) };
+            mi.Click += delegate
+            {
+                double chosen = (double)((ToolStripMenuItem)mi).Tag;
+                SetFontFactor(chosen);
+            };
+            miFontSize.DropDownItems.Add(mi);
+        }
+
         miStartup = new ToolStripMenuItem("开机自启");
         miStartup.CheckOnClick = true;
         miStartup.Checked = StartupExists();
@@ -135,6 +154,7 @@ public class TrayContext : ApplicationContext
         };
         menu.Items.Add(miRefresh);
         menu.Items.Add(miInterval);
+        menu.Items.Add(miFontSize);
         menu.Items.Add(miStartup);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(miExit);
@@ -208,6 +228,65 @@ public class TrayContext : ApplicationContext
                     {
                         int n = Convert.ToInt32(v);
                         if (n >= 5 && n <= 3600) return n;
+                    }
+                }
+            }
+        }
+        catch { }
+        return -1;
+    }
+
+    void SetFontFactor(double f)
+    {
+        fontFactor = f;
+        try
+        {
+            using (RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\MouseBatteryTray"))
+            {
+                k.SetValue("FontFactor", f.ToString("0.00"), RegistryValueKind.String);
+            }
+        }
+        catch { }
+        ToolStripMenuItem parent = null;
+        foreach (ToolStripItem it in ni.ContextMenuStrip.Items)
+        {
+            ToolStripMenuItem mi = it as ToolStripMenuItem;
+            if (mi != null && mi.Text == "数字大小") { parent = mi; break; }
+        }
+        if (parent != null)
+        {
+            foreach (ToolStripItem sub in parent.DropDownItems)
+            {
+                ToolStripMenuItem smi = sub as ToolStripMenuItem;
+                if (smi != null) smi.Checked = Math.Abs((double)smi.Tag - f) < 0.01;
+            }
+        }
+        Log("font factor set to " + f.ToString("0.00"));
+        // invalidate cache and redraw immediately
+        iconCache.Clear();
+        if (lastPct >= 0)
+        {
+            ni.Icon = IconFor(lastPct.ToString(), ColorFor(lastPct));
+        }
+        else
+        {
+            ni.Icon = IconFor("–", Color.Gray);
+        }
+    }
+
+    double LoadFontFactor()
+    {
+        try
+        {
+            using (RegistryKey k = Registry.CurrentUser.OpenSubKey("Software\\MouseBatteryTray"))
+            {
+                if (k != null)
+                {
+                    object v = k.GetValue("FontFactor");
+                    if (v != null)
+                    {
+                        double d = Convert.ToDouble(v, System.Globalization.CultureInfo.InvariantCulture);
+                        if (d >= 0.4 && d <= 1.0) return d;
                     }
                 }
             }
@@ -304,20 +383,23 @@ public class TrayContext : ApplicationContext
 
     Icon IconFor(string s, Color c)
     {
-        string key = s + "|" + c.ToArgb();
+        int trayPx = SystemInformation.SmallIconSize.Width;   // 跟随系统 DPI：100%=16, 125%=20, 150%=24…
+        string key = s + "|" + c.ToArgb() + "|" + trayPx + "|" + fontFactor.ToString("0.00");
         Icon existing;
         if (iconCache.TryGetValue(key, out existing)) return existing;
-        Bitmap bmp = new Bitmap(16, 16);
+        Bitmap bmp = new Bitmap(trayPx, trayPx);
         using (Graphics g = Graphics.FromImage(bmp))
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            using (Font f = new Font("Segoe UI", 9f, FontStyle.Bold, GraphicsUnit.Pixel))
+            float fontPx = (float)(trayPx * fontFactor);
+            using (Font f = new Font("Segoe UI", fontPx, FontStyle.Bold, GraphicsUnit.Pixel))
             {
                 using (Brush br = new SolidBrush(c))
                 {
                     SizeF sz = g.MeasureString(s, f);
-                    g.DrawString(s, f, br, (16f - sz.Width) / 2f, (16f - sz.Height) / 2f);
+                    // 垂直方向略上移补偿 GDI 基线，数字更大更居中
+                    g.DrawString(s, f, br, (trayPx - sz.Width) / 2f, (trayPx - sz.Height) / 2f - trayPx * 0.06f);
                 }
             }
         }
