@@ -57,3 +57,17 @@ C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /target:winexe /
 ## License
 
 MIT
+
+---
+
+## 充电状态为什么显示不了？
+
+**固件限制，不是 bug。** 本设备与 Acer PopGo 等 More&Better 公版鼠标同源（厂商页 0xFFB5 / Report ID 0xB5 / B5 01 01 <电量%> 帧结构完全一致）。社区项目 [acer-popgo-companion](https://github.com/ksanjeev284/acer-popgo-companion) 独立验证了同样的事实：**2.4G 链路上没有充电标志位**，充电电流走鼠标内部充电 IC，不经过接收器。
+
+本工具采取与该项目相同的客户端启发式作为补偿：
+
+- 电量**连续两次上升** → 推断「⚡充电中」（tooltip 显示）
+- 电量达到 **100%** → 「✓已充满」
+- 电量下降 → 「放电中」
+
+已知固件问题：电量百分比可能长期冻结（PopGo 社区同样记录了卡在 56% 的案例）。这是固件 SOC 估算问题，主机侧无法修复。
