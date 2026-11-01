@@ -83,6 +83,9 @@ public class TrayContext : ApplicationContext
     bool lowWarned = false;
     bool firstShown = false;
     bool busy = false;
+    int riseCount = 0;        // 连续上升计数 → 推断充电中
+    int? lastReportedPct = null; // 上一次向用户报告的电量
+    string chargeState = "?"; // Charging / Full / Battery / ?
     double fontFactor = 0.70;   // 字号比例（相对托盘图标像素尺寸）
     string colorMode = "auto";  // auto=按电量三色，或固定色名 white/black/yellow/cyan/magenta/green
     Dictionary<string, Icon> iconCache = new Dictionary<string, Icon>();
@@ -422,8 +425,35 @@ public class TrayContext : ApplicationContext
         if (pct.HasValue)
         {
             lastPct = pct.Value;
+
+            // —— 充电状态启发式（固件不暴露充电标志，客户端推断）——
+            // PopGo/More&Better 同源固件已知问题：电量百分比可能长期冻结。
+            if (lastReportedPct.HasValue)
+            {
+                if (pct.Value > lastReportedPct.Value)
+                {
+                    riseCount++;
+                    // 连续两次上升才判定（防单点抖动）
+                    if (riseCount >= 2) chargeState = "Charging";
+                }
+                else if (pct.Value < lastReportedPct.Value)
+                {
+                    riseCount = 0;
+                    chargeState = "Battery";
+                }
+                if (pct.Value >= 100) chargeState = "Full";
+                if (pct.Value <= 5 && chargeState != "Full") riseCount = 0;
+            }
+            lastReportedPct = pct.Value;
+
+            string prefix = chargeState == "Charging" ? "⚡" :
+                            chargeState == "Full" ? "✓" : "";
             ni.Icon = IconFor(pct.Value.ToString(), ColorFor(pct.Value));
-            ni.Text = string.Format("鼠标电量 {0}%", pct.Value);
+            ni.Text = prefix == "" ?
+                string.Format("鼠标电量 {0}%", pct.Value) :
+                string.Format("鼠标电量 {0}%（{1}）", pct.Value,
+                    chargeState == "Charging" ? "充电中" : "已充满");
+
             if (!firstShown)
             {
                 firstShown = true;
@@ -431,7 +461,7 @@ public class TrayContext : ApplicationContext
                     string.Format("当前电量 {0}%。图标在任务栏右下角 ^ 折叠区内，可将其拖出或到 设置>个性化>任务栏>其他系统托盘图标 设为始终显示。", pct.Value),
                     ToolTipIcon.Info);
             }
-            if (pct.Value < 20 && !lowWarned)
+            if (pct.Value < 20 && !lowWarned && chargeState != "Charging")
             {
                 lowWarned = true;
                 ni.ShowBalloonTip(6000, "鼠标电量低",
