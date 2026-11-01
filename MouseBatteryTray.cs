@@ -87,6 +87,7 @@ public class TrayContext : ApplicationContext
     int? lastReportedPct = null; // 上一次向用户报告的电量
     string chargeState = "?"; // Charging / Full / Battery / ?
     double fontFactor = 0.70;   // 字号比例（相对托盘图标像素尺寸）
+    string fontFamily = "Segoe UI";  // 数字字体
     string colorMode = "auto";  // auto=按电量三色，或固定色名 white/black/yellow/cyan/magenta/green
     Dictionary<string, Icon> iconCache = new Dictionary<string, Icon>();
 
@@ -144,6 +145,34 @@ public class TrayContext : ApplicationContext
             miFontSize.DropDownItems.Add(mi);
         }
 
+        ToolStripMenuItem miFont = new ToolStripMenuItem("数字字体");
+        // 系统自带、小尺寸数字辨识度好的字体（缺 FontFallback 会自动回退）
+        string[][] fonts = {
+            new[] { "Segoe UI", "标准（默认）" },
+            new[] { "Arial", "Arial 圆润" },
+            new[] { "Tahoma", "Tahoma 紧凑" },
+            new[] { "Verdana", "Verdana 宽大" },
+            new[] { "Consolas", "Consolas 等宽" },
+            new[] { "Impact", "Impact 粗壮" },
+            new[] { "Arial Black", "Arial Black 特粗" },
+            new[] { "Georgia", "Georgia 衬线" },
+            new[] { "Segoe UI Black", "极粗黑体" },
+        };
+        string savedFont = LoadFontFamily();
+        if (savedFont != null) fontFamily = savedFont;
+        foreach (string[] fe in fonts)
+        {
+            string fam = fe[0];
+            string label = fe[1];
+            ToolStripMenuItem mi = new ToolStripMenuItem(label) { Tag = fam, Checked = (fam == fontFamily) };
+            mi.Click += delegate
+            {
+                string chosen = (string)((ToolStripMenuItem)mi).Tag;
+                SetFontFamily(chosen);
+            };
+            miFont.DropDownItems.Add(mi);
+        }
+
         ToolStripMenuItem miColor = new ToolStripMenuItem("数字颜色");
         string[] colorNames = { "auto", "white", "yellow", "cyan", "magenta", "green", "black" };
         string[] colorLabels = { "自动(按电量)", "白色", "黄色", "青色", "洋红", "绿色", "黑色" };
@@ -176,6 +205,7 @@ public class TrayContext : ApplicationContext
         menu.Items.Add(miRefresh);
         menu.Items.Add(miInterval);
         menu.Items.Add(miFontSize);
+        menu.Items.Add(miFont);
         menu.Items.Add(miColor);
         menu.Items.Add(miStartup);
         menu.Items.Add(new ToolStripSeparator());
@@ -370,6 +400,62 @@ public class TrayContext : ApplicationContext
         return null;
     }
 
+    void SetFontFamily(string fam)
+    {
+        fontFamily = fam;
+        try
+        {
+            using (RegistryKey k = Registry.CurrentUser.CreateSubKey("Software\\MouseBatteryTray"))
+            {
+                k.SetValue("FontFamily", fam, RegistryValueKind.String);
+            }
+        }
+        catch { }
+        ToolStripMenuItem parent = null;
+        foreach (ToolStripItem it in ni.ContextMenuStrip.Items)
+        {
+            ToolStripMenuItem mi = it as ToolStripMenuItem;
+            if (mi != null && mi.Text == "数字字体") { parent = mi; break; }
+        }
+        if (parent != null)
+        {
+            foreach (ToolStripItem sub in parent.DropDownItems)
+            {
+                ToolStripMenuItem smi = sub as ToolStripMenuItem;
+                if (smi != null) smi.Checked = ((string)smi.Tag == fam);
+            }
+        }
+        Log("font family set to " + fam);
+        iconCache.Clear();
+        if (lastPct >= 0) ni.Icon = IconFor(lastPct.ToString(), ColorFor(lastPct));
+        else ni.Icon = IconFor("–", Color.Gray);
+    }
+
+    string LoadFontFamily()
+    {
+        try
+        {
+            using (RegistryKey k = Registry.CurrentUser.OpenSubKey("Software\\MouseBatteryTray"))
+            {
+                if (k != null)
+                {
+                    object v = k.GetValue("FontFamily");
+                    if (v != null)
+                    {
+                        string s = v.ToString();
+                        // validate: font must exist, else fall back to default
+                        using (Font test = new Font(s, 10))
+                        {
+                            if (test.Name == s || test.OriginalFontName == s) return s;
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
     void PollNow()
     {
         Log("PollNow enter, busy=" + busy);
@@ -498,7 +584,7 @@ public class TrayContext : ApplicationContext
     Icon IconFor(string s, Color c)
     {
         int trayPx = SystemInformation.SmallIconSize.Width;   // 跟随系统 DPI：100%=16, 125%=20, 150%=24…
-        string key = s + "|" + c.ToArgb() + "|" + trayPx + "|" + fontFactor.ToString("0.00");
+        string key = s + "|" + c.ToArgb() + "|" + trayPx + "|" + fontFactor.ToString("0.00") + "|" + fontFamily;
         Icon existing;
         if (iconCache.TryGetValue(key, out existing)) return existing;
         Bitmap bmp = new Bitmap(trayPx, trayPx);
@@ -507,7 +593,7 @@ public class TrayContext : ApplicationContext
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             float fontPx = (float)(trayPx * fontFactor);
-            using (Font f = new Font("Segoe UI", fontPx, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (Font f = new Font(fontFamily, fontPx, FontStyle.Bold, GraphicsUnit.Pixel))
             {
                 using (Brush br = new SolidBrush(c))
                 {
